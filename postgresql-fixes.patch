@@ -1,0 +1,133 @@
+diff --git a/openmemory/api/app/database.py b/openmemory/api/app/database.py
+index 4ab4eaaa..31256a5c 100644
+--- a/openmemory/api/app/database.py
++++ b/openmemory/api/app/database.py
+@@ -12,10 +12,12 @@ if not DATABASE_URL:
+     raise RuntimeError("DATABASE_URL is not set in environment")
+ 
+ # SQLAlchemy engine & session
+-engine = create_engine(
+-    DATABASE_URL,
+-    connect_args={"check_same_thread": False}  # Needed for SQLite
+-)
++# Only use check_same_thread for SQLite
++connect_args = {}
++if DATABASE_URL.startswith("sqlite"):
++    connect_args = {"check_same_thread": False}
++
++engine = create_engine(DATABASE_URL, connect_args=connect_args)
+ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+ 
+ # Base class for models
+diff --git a/openmemory/api/app/routers/memories.py b/openmemory/api/app/routers/memories.py
+index 3af7bbe1..23fac97b 100644
+--- a/openmemory/api/app/routers/memories.py
++++ b/openmemory/api/app/routers/memories.py
+@@ -159,10 +159,11 @@ async def list_memories(
+             query = query.order_by(sort_field.desc()) if sort_direction == "desc" else query.order_by(sort_field.asc())
+ 
+     # Add eager loading for app and categories
++    # Fix: ORDER BY must start with DISTINCT ON column to avoid PostgreSQL error
+     query = query.options(
+         joinedload(Memory.app),
+         joinedload(Memory.categories)
+-    ).distinct(Memory.id)
++    ).distinct(Memory.id).order_by(Memory.id, Memory.created_at.desc())
+ 
+     # Get paginated results with transformer
+     return sqlalchemy_paginate(
+@@ -603,18 +604,22 @@ async def filter_memories(
+             raise HTTPException(status_code=400, detail="Invalid sort column")
+ 
+         sort_field = sort_mapping[request.sort_column]
+-        if sort_direction == 'desc':
+-            query = query.order_by(sort_field.desc())
+-        else:
+-            query = query.order_by(sort_field.asc())
++        # Note: ORDER BY will be applied below with DISTINCT ON fix
+     else:
+-        # Default sorting
+-        query = query.order_by(Memory.created_at.desc())
++        sort_field = Memory.created_at
++        sort_direction = 'desc'
+ 
+     # Add eager loading for categories and make the query distinct
+-    query = query.options(
+-        joinedload(Memory.categories)
+-    ).distinct(Memory.id)
++    # Fix: ORDER BY must start with DISTINCT ON column to avoid PostgreSQL error
++    # Apply sorting as secondary order after id
++    if sort_direction == 'desc':
++        query = query.options(
++            joinedload(Memory.categories)
++        ).distinct(Memory.id).order_by(Memory.id, sort_field.desc())
++    else:
++        query = query.options(
++            joinedload(Memory.categories)
++        ).distinct(Memory.id).order_by(Memory.id, sort_field.asc())
+ 
+     # Use fastapi-pagination's paginate function
+     return sqlalchemy_paginate(
+@@ -658,6 +663,7 @@ async def get_related_memories(
+         return Page.create([], total=0, params=params)
+     
+     # Build query for related memories
++    # Fix: ORDER BY must start with DISTINCT ON column to avoid PostgreSQL error
+     query = db.query(Memory).distinct(Memory.id).filter(
+         Memory.user_id == user.id,
+         Memory.id != memory_id,
+@@ -668,6 +674,7 @@ async def get_related_memories(
+         joinedload(Memory.categories),
+         joinedload(Memory.app)
+     ).order_by(
++        Memory.id,
+         func.count(Category.id).desc(),
+         Memory.created_at.desc()
+     ).group_by(Memory.id)
+diff --git a/openmemory/api/config.json b/openmemory/api/config.json
+index 15defa01..94f8d769 100644
+--- a/openmemory/api/config.json
++++ b/openmemory/api/config.json
+@@ -3,17 +3,27 @@
+         "llm": {
+             "provider": "openai",
+             "config": {
+-                "model": "gpt-4o-mini",
++                "model": "gemini-2.5-flash",
+                 "temperature": 0.1,
+                 "max_tokens": 2000,
+-                "api_key": "env:API_KEY"
++                "api_key": "env:OPENAI_API_KEY",
++                "base_url": "http://litellm:4000/v1"
+             }
+         },
+         "embedder": {
+             "provider": "openai",
+             "config": {
+                 "model": "text-embedding-3-small",
+-                "api_key": "env:API_KEY"
++                "temperature": 0,
++                "api_key": "env:OPENAI_API_KEY",
++                "base_url": "http://litellm:4000/v1"
++            }
++        },
++        "vector_store": {
++            "provider": "qdrant",
++            "config": {
++                "url": "http://qdrant:6333",
++                "collection_name": "openmemory"
+             }
+         }
+     }
+diff --git a/openmemory/api/requirements.txt b/openmemory/api/requirements.txt
+index 239c59b8..d4300ba5 100644
+--- a/openmemory/api/requirements.txt
++++ b/openmemory/api/requirements.txt
+@@ -8,6 +8,7 @@ python-multipart>=0.0.5
+ fastapi-pagination>=0.12.0
+ mem0ai>=0.1.92
+ openai>=1.40.0
++google-genai>=0.3
+ mcp[cli]>=1.3.0
+ pytest>=7.0.0
+ pytest-asyncio>=0.21.0

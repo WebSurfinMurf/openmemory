@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  openmemory-api:
+    build:
+      context: ./source/openmemory/api
+      dockerfile: Dockerfile
+    image: openmemory-api:latest
+    container_name: openmemory-api
+    restart: unless-stopped
+
+    env_file:
+      - $HOME/projects/secrets/openmemory.env
+
+    environment:
+      - USER=${USER}
+      - API_KEY=${API_KEY}
+
+    networks:
+      - mcp-net            # Primary network + LiteLLM access
+      - qdrant-net         # Access centralized Qdrant
+      - postgres-net       # Access centralized PostgreSQL
+      - loki-net           # Logging
+      - traefik-net        # External HTTPS access for UI browser calls
+
+    ports:
+      - "8765:8765"
+
+    volumes:
+      - ./source/openmemory/api:/usr/src/openmemory
+      - /home/administrator/projects/data/openmemory:/data
+
+    command: >
+      sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --reload --workers 4"
+
+    labels:
+      - "com.docker.compose.project=openmemory"
+      - "description=OpenMemory API with MCP server"
+      - "purpose=ai-memory"
+      # Traefik labels for /api/* routing
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-net"
+      - "traefik.http.routers.openmemory-api.rule=Host(`openmemory.ai-servicers.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.openmemory-api.entrypoints=websecure"
+      - "traefik.http.routers.openmemory-api.tls=true"
+      - "traefik.http.routers.openmemory-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.openmemory-api.priority=90"
+      - "traefik.http.services.openmemory-api.loadbalancer.server.port=8765"
+
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 10s bash -c ':> /dev/tcp/127.0.0.1/8765' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  openmemory-ui:
+    image: mem0/openmemory-ui:latest
+    container_name: openmemory-ui
+    restart: unless-stopped
+
+    environment:
+      NEXT_PUBLIC_API_URL: "https://openmemory.ai-servicers.com"
+      NEXT_PUBLIC_USER_ID: "administrator"
+
+    networks:
+      - traefik-net        # External HTTPS access (via ForwardAuth)
+      - mcp-net            # Backend network (shared with API)
+      - loki-net           # Logging
+
+    depends_on:
+      - openmemory-api
+
+    labels:
+      - "com.docker.compose.project=openmemory"
+      - "description=OpenMemory UI Dashboard"
+      - "purpose=ai-memory-ui"
+      # Traefik labels
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-net"
+      - "traefik.http.routers.openmemory-ui.rule=Host(`openmemory.ai-servicers.com`)"
+      - "traefik.http.routers.openmemory-ui.entrypoints=websecure"
+      - "traefik.http.routers.openmemory-ui.tls=true"
+      - "traefik.http.routers.openmemory-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.openmemory-ui.middlewares=openmemory-ui-auth,openmemory-ui-errors"
+      - "traefik.http.services.openmemory-ui.loadbalancer.server.port=3000"
+      # ForwardAuth middleware
+      - "traefik.http.middlewares.openmemory-ui-auth.forwardauth.address=http://openmemory-ui-auth-proxy:4180/oauth2/auth"
+      - "traefik.http.middlewares.openmemory-ui-auth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.openmemory-ui-auth.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups"
+      # Error handling middleware - redirect 401 to OAuth2 sign-in
+      - "traefik.http.middlewares.openmemory-ui-errors.errors.status=401-403"
+      - "traefik.http.middlewares.openmemory-ui-errors.errors.service=openmemory-auth"
+      - "traefik.http.middlewares.openmemory-ui-errors.errors.query=/oauth2/start?rd={url}"
+
+    # Healthcheck disabled - Next.js container doesn't have bash
+    # healthcheck:
+    #   test: ["CMD-SHELL", "timeout 10s bash -c ':> /dev/tcp/127.0.0.1/3000' || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+
+  openmemory-ui-auth-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    container_name: openmemory-ui-auth-proxy
+    restart: unless-stopped
+
+    env_file:
+      - $HOME/secrets/openmemory-oauth2.env
+
+    networks:
+      - traefik-net        # For Traefik ForwardAuth communication
+      - keycloak-net       # Keycloak authentication
+
+    labels:
+      - "com.docker.compose.project=openmemory"
+      - "description=OAuth2 Proxy ForwardAuth for OpenMemory UI"
+      - "purpose=authentication"
+      # Traefik labels for OAuth2 endpoints
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-net"
+      - "traefik.http.routers.openmemory-auth.rule=Host(`openmemory.ai-servicers.com`) && PathPrefix(`/oauth2`)"
+      - "traefik.http.routers.openmemory-auth.entrypoints=websecure"
+      - "traefik.http.routers.openmemory-auth.tls=true"
+      - "traefik.http.routers.openmemory-auth.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.openmemory-auth.priority=100"
+      - "traefik.http.services.openmemory-auth.loadbalancer.server.port=4180"
+
+networks:
+  mcp-net:
+    external: true
+  qdrant-net:
+    external: true
+  postgres-net:
+    external: true
+  loki-net:
+    external: true
+  traefik-net:
+    external: true
+  keycloak-net:
+    external: true
