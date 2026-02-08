@@ -4,7 +4,7 @@
 
 set -e
 
-SECRETS_FILE="/home/administrator/secrets/openmemory-oauth2.env"
+SECRETS_FILE="/home/administrator/projects/secrets/openmemory-oauth2.env"
 
 echo "Generating OAuth2 secrets..."
 

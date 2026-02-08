@@ -105,7 +105,7 @@ OpenMemory API (openmemory-api:8765)
 ```
 
 ### Environment Variables
-**Location**: `/home/administrator/secrets/openmemory.env`
+**Location**: `/home/administrator/projects/secrets/openmemory.env`
 
 ```bash
 # User Configuration
@@ -254,7 +254,7 @@ docker restart openmemory-api
 - **Source Code**: `/home/administrator/projects/openmemory/source/`
 - **Data Directory**: `/home/administrator/projects/data/openmemory/` (centralized data storage)
 - **Requirements**: `/home/administrator/projects/openmemory/source/openmemory/api/requirements.txt`
-- **Secrets**: `/home/administrator/secrets/openmemory.env`
+- **Secrets**: `/home/administrator/projects/secrets/openmemory.env`
 
 ### Key Source Files
 - **Memory Client**: `source/openmemory/api/app/utils/memory.py`
@@ -599,7 +599,7 @@ OpenMemory UI → API (http://linuxserver.lan:8765)
       - "traefik.http.routers.openmemory-auth.priority=100"
 ```
 
-**OAuth2 Proxy Config** (`$HOME/secrets/openmemory-oauth2.env`):
+**OAuth2 Proxy Config** (`$HOME/projects/secrets/openmemory-oauth2.env`):
 ```bash
 OAUTH2_PROXY_PROVIDER=keycloak-oidc
 OAUTH2_PROXY_OIDC_ISSUER_URL=http://keycloak:8080/realms/master

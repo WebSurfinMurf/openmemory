@@ -107,7 +107,7 @@ services:
     restart: unless-stopped
 
     env_file:
-      - $HOME/secrets/openmemory-oauth2.env
+      - $HOME/projects/secrets/openmemory-oauth2.env
 
     networks:
       - traefik-net        # For Traefik ForwardAuth communication
